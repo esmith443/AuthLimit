@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("AuthLimit", "emma_smith", "1.2.0")]
+    [Info("AuthLimit", "emma_smith", "1.2.1")]
     [Description("Limits the maximum number of authorized players on TCs, locks, and turrets to prevent teaming")]
     public class AuthLimit : RustPlugin
     {
@@ -76,7 +76,21 @@ namespace Oxide.Plugins
             try
             {
                 _config = Config.ReadObject<PluginConfig>();
-                if (_config == null) LoadDefaultConfig();
+                if (_config == null)
+                {
+                    LoadDefaultConfig();
+                }
+                else
+                {
+                    _config.Features = _config.Features ?? new PluginConfig.FeatureSettings();
+                    _config.Discord = _config.Discord ?? new PluginConfig.DiscordSettings();
+                    _config.Messages = _config.Messages ?? new Dictionary<string, string>();
+                    foreach (var pair in GetDefaultMessages())
+                    {
+                        if (!_config.Messages.ContainsKey(pair.Key))
+                            _config.Messages[pair.Key] = pair.Value;
+                    }
+                }
                 SaveConfig();
             }
             catch
@@ -88,14 +102,17 @@ namespace Oxide.Plugins
         protected override void LoadDefaultConfig()
         {
             _config = new PluginConfig();
-            _config.Messages = new Dictionary<string, string>
-            {
-                ["AuthLimitReached"] = "Authorization limit reached! Max {0} players allowed.",
-                ["AuthLimitReachedTC"] = "Tool Cupboard authorization limit reached! Max {0} players allowed.",
-                ["AuthLimitReachedCodeLock"] = "Code Lock authorization limit reached! Max {0} players allowed.",
-                ["AuthLimitReachedTurret"] = "Auto Turret authorization limit reached! Max {0} players allowed."
-            };
+            _config.Messages = GetDefaultMessages();
         }
+
+        private Dictionary<string, string> GetDefaultMessages() => new Dictionary<string, string>
+        {
+            ["AuthLimitReached"] = "Authorization limit reached! Max {0} players allowed.",
+            ["AuthLimitReachedTC"] = "Tool Cupboard authorization limit reached! Max {0} players allowed.",
+            ["AuthLimitReachedCodeLock"] = "Code Lock authorization limit reached! Max {0} players allowed.",
+            ["AuthLimitReachedTurret"] = "Auto Turret authorization limit reached! Max {0} players allowed.",
+            ["NoPermission"] = "You don't have permission to use this command."
+        };
 
         protected override void SaveConfig() => Config.WriteObject(_config);
 
@@ -157,7 +174,9 @@ namespace Oxide.Plugins
 
             _lastWebhookTime[cooldownKey] = DateTime.UtcNow;
 
-            var ownerName = covalence.Players.FindPlayerById(ownerId.ToString())?.Name ?? ownerId.ToString();
+            var ownerName = ownerId != 0
+                ? covalence.Players.FindPlayerById(ownerId.ToString())?.Name ?? ownerId.ToString()
+                : "Unknown";
             var entityPos = entity.transform.position;
             string teleportCommand = $"teleportpos {entityPos.x:F1} {entityPos.y:F1} {entityPos.z:F1}";
 
@@ -291,6 +310,44 @@ namespace Oxide.Plugins
             return null;
         }
 
+        private object OnCupboardAssign(BuildingPrivlidge privilege, ulong targetPlayerId, BasePlayer player)
+        {
+            if (!_config.Features.LimitTCs) return null;
+            if (privilege == null || player == null) return null;
+
+            if (permission.UserHasPermission(player.UserIDString, PermissionBypass))
+            {
+                if (_config.DebugLogging)
+                    Puts($"{player.displayName} has bypass permission, allowing TC assign");
+                return null;
+            }
+
+            if (privilege.authorizedPlayers.Any(x => x.userid == targetPlayerId))
+            {
+                if (_config.DebugLogging)
+                    Puts($"Assign target {targetPlayerId} already authorized on TC");
+                return null;
+            }
+
+            int currentAuthCount = privilege.authorizedPlayers.Count;
+
+            if (_config.DebugLogging)
+                Puts($"TC assign check: Current={currentAuthCount}, Max={_config.MaxAuthLimit}, Player={player.displayName}, Target={targetPlayerId}");
+
+            if (currentAuthCount >= _config.MaxAuthLimit)
+            {
+                player.ChatMessage(string.Format(lang.GetMessage("AuthLimitReachedTC", this, player.UserIDString), _config.MaxAuthLimit));
+                SendAuthLimitWebhook(player, privilege, "Tool Cupboard", privilege.OwnerID, currentAuthCount);
+
+                if (_config.DebugLogging)
+                    Puts($"Blocked TC assign by {player.displayName} for {targetPlayerId} - limit reached");
+
+                return false;
+            }
+
+            return null;
+        }
+
         private object OnTurretAuthorize(AutoTurret turret, BasePlayer player)
         {
             if (!_config.Features.LimitTurrets) return null;
@@ -329,7 +386,7 @@ namespace Oxide.Plugins
             return null;
         }
 
-        private object OnCodeEntered(CodeLock codeLock, BasePlayer player, string code, bool isGuestCode)
+        private object OnCodeEntered(CodeLock codeLock, BasePlayer player, string code)
         {
             if (!_config.Features.LimitCodeLocks) return null;
             if (codeLock == null || player == null) return null;
@@ -341,7 +398,7 @@ namespace Oxide.Plugins
                 return null;
             }
 
-            if (!codeLock.code.Equals(code) && !codeLock.guestCode.Equals(code))
+            if (code != codeLock.code && code != codeLock.guestCode)
             {
                 return null;
             }
@@ -429,7 +486,7 @@ namespace Oxide.Plugins
         {
             if (!permission.UserHasPermission(player.UserIDString, PermissionAdmin))
             {
-                player.ChatMessage("You don't have permission to use this command.");
+                player.ChatMessage(lang.GetMessage("NoPermission", this, player.UserIDString));
                 return;
             }
 

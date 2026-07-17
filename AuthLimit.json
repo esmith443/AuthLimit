@@ -16,6 +16,7 @@
     "AuthLimitReached": "Authorization limit reached! Max {0} players allowed.",
     "AuthLimitReachedTC": "Tool Cupboard authorization limit reached! Max {0} players allowed.",
     "AuthLimitReachedCodeLock": "Code Lock authorization limit reached! Max {0} players allowed.",
-    "AuthLimitReachedTurret": "Auto Turret authorization limit reached! Max {0} players allowed."
+    "AuthLimitReachedTurret": "Auto Turret authorization limit reached! Max {0} players allowed.",
+    "NoPermission": "You don't have permission to use this command."
   }
 }
